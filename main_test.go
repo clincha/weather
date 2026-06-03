@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 type FullResponse struct {
@@ -12,9 +14,7 @@ type FullResponse struct {
 }
 
 func TestPopulateGoogleAPIData(t *testing.T) {
-
 	const workers = 4
-
 	DataCenters := [4]DataCenter{
 		{
 			Address: "London",
@@ -33,6 +33,9 @@ func TestPopulateGoogleAPIData(t *testing.T) {
 			GeoCode: GeoCode{},
 		},
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	wg := sync.WaitGroup{}
 
@@ -54,7 +57,11 @@ func TestPopulateGoogleAPIData(t *testing.T) {
 				if err != nil {
 					t.Errorf("Error populating Google APIData: %v", err)
 				}
-				Responses <- FullResponse{dc, weatherData}
+				select {
+				case Responses <- FullResponse{dc, weatherData}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}()
 	}
@@ -64,8 +71,16 @@ func TestPopulateGoogleAPIData(t *testing.T) {
 		close(Responses)
 	}()
 
-	for response := range Responses {
-		fmt.Printf("The weather in %s is %f degrees C\n", response.DC.Address, response.Weather.Temperature.Degrees)
+	for {
+		select {
+		case response, ok := <-Responses:
+			if !ok {
+				return
+			}
+			fmt.Printf("The weather in %s is %f degrees C\n", response.DC.Address, response.Weather.Temperature.Degrees)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
 	}
 
 }
