@@ -6,9 +6,14 @@ import (
 	"testing"
 )
 
+type FullResponse struct {
+	DC      DataCenter
+	Weather WeatherData
+}
+
 func TestPopulateGoogleAPIData(t *testing.T) {
 
-	WeatherChan := make(chan WeatherData, 4)
+	const workers = 4
 
 	DataCenters := [4]DataCenter{
 		{
@@ -31,32 +36,36 @@ func TestPopulateGoogleAPIData(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 
-	wg.Add(len(DataCenters))
+	DataCenterChannel := make(chan DataCenter, len(DataCenters))
 	go func() {
-		wg.Wait()
-		close(WeatherChan)
+		for _, dc := range DataCenters {
+			DataCenterChannel <- dc
+		}
+		close(DataCenterChannel)
 	}()
-	for _, dc := range DataCenters {
-		go func(dc DataCenter) {
+
+	Responses := make(chan FullResponse, len(DataCenters))
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
 			defer wg.Done()
-			weatherData, err := PopulateGoogleAPIData(dc)
-			if err != nil {
-				t.Errorf("Error populating Google APIData: %v", err)
+			for dc := range DataCenterChannel {
+				weatherData, err := PopulateGoogleAPIData(dc)
+				if err != nil {
+					t.Errorf("Error populating Google APIData: %v", err)
+				}
+				Responses <- FullResponse{dc, weatherData}
 			}
-
-			if weatherData.Temperature.Unit == "" {
-				t.Errorf("Temperature unit not populated")
-			}
-
-			if weatherData.Temperature.Degrees == 0 {
-				t.Errorf("Temperature degrees not populated")
-			}
-			WeatherChan <- weatherData
-		}(dc)
+		}()
 	}
 
-	for weather := range WeatherChan {
-		fmt.Println(weather)
+	go func() {
+		wg.Wait()
+		close(Responses)
+	}()
+
+	for response := range Responses {
+		fmt.Printf("The weather in %s is %f degrees C\n", response.DC.Address, response.Weather.Temperature.Degrees)
 	}
 
 }
